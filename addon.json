@@ -1,0 +1,11 @@
+{
+    "name": "CS 3D Viewer",
+    "displayName": "3D View",
+    "version": "1.0",
+    "description": "CubeSat 3D Viewer",
+    "author": "Tate Schrock",
+    "url": "",
+    "path": "3dviewer1",
+    "color": "green",
+    "enabled": true
+}
