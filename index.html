@@ -28,9 +28,6 @@
       height: 100%;
     }
     button {
-      position: absolute;
-      top: 20px;
-      left: 20px;
       padding: 10px;
       background-color: #333;
       color: white;
@@ -40,34 +37,125 @@
     button:hover {
       background-color: #555;
     }
+    .xyz-indicator {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      width: 100px;
+      height: 100px;
+    }
+    .position-display {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: monospace;
+    }
+    .settings-panel {
+      position: absolute;
+      bottom: 60px;
+      left: 20px;
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white; 
+      padding: 15px;
+      border-radius: 5px;
+      display: none;
+    }
+    .settings-panel.visible {
+      display: block;
+    }
+    .settings-panel input {
+      margin: 5px 0;
+      width: 100px;
+    }
+    .settings-panel label {
+      display: inline-block;
+      width: 120px;
+    }
+    .settings-toggle {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      /* height: 40px; */
+      background-color: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: monospace;
+    }
   </style>
 </head>
 <body>
-  <button onclick="rotateModel()">Rotate Model</button>
   <div id="container">
     <canvas id="webgl-canvas"></canvas>
   </div>
+  <div class="xyz-indicator"></div>
+  <div class="position-display">
+    Orientation: <span id="model-orientation">yaw: 0°, pitch: 0°, roll: 0°</span>
+  </div>
+  <button id="settings-toggle" class="settings-toggle">Scene Settings</button>
+  <div class="settings-panel">
+    <div>
+      <label>Ambient Light:</label>
+      <input type="range" id="ambient-intensity" min="0" max="2" step="0.1" value="1">
+    </div>
+    <div>
+      <label>Key Light:</label>
+      <input type="range" id="key-intensity" min="0" max="2" step="0.1" value="1">
+    </div>
+    <div>
+      <label>Background Color:</label>
+      <input type="color" id="bg-color" value="#808080">
+    </div>
+  </div>
 
-  
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/loaders/GLTFLoader.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r126/three.min.js" integrity="sha512-n8IpKWzDnBOcBhRlHirMZOUvEq2bLRMuJGjuVqbzUJwtTsgwOgK5aS0c1JA647XWYfqvXve8k3PtZdzpipFjgg==" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/three@0.126.0/examples/js/loaders/GLTFLoader.js"></script>
 
   <script>
     let scene, camera, renderer, model;
     let rotationAngle = 0;
+    let ambientLight, keyLight;
+    let groundPlane = null;
+    let isDragging = false;
+    let isRightDragging = false;
+    let previousMousePosition = {
+        x: 0,
+        y: 0
+    };
+    let spherical = new THREE.Spherical();
+    let target = new THREE.Vector3(0, 0, 0);
 
     // Initialize the scene, camera, and renderer
     function init() {
       scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x808080); // Gray background
       camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-      renderer = new THREE.WebGLRenderer({ canvas: document.getElementById("webgl-canvas") });
+      renderer = new THREE.WebGLRenderer({ 
+        canvas: document.getElementById("webgl-canvas"),
+        antialias: true
+      });
       renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
       // Load a custom GLTF model
       const loader = new THREE.GLTFLoader();
-      loader.load('./cubesatv1.glb', function(gltf) {
+      loader.load('cubesatv1.glb', function(gltf) {
         model = gltf.scene;
+        model.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+          }
+        });
         scene.add(model);
+        
+        // Scale the model down
+        model.scale.set(0.045, 0.045, 0.045);
         
         // Adjust the model position if needed
         model.position.set(0, 0, 0);
@@ -78,32 +166,281 @@
         console.error(error);
       });
 
-      // Add a light source to the scene
-      const light = new THREE.AmbientLight(0x404040);  // Ambient light
-      scene.add(light);
+      // Store light references
+      ambientLight = new THREE.AmbientLight(0x404040, 1.0);
+      scene.add(ambientLight);
+      
+      keyLight = new THREE.SpotLight(0xffffff, 1);
+      keyLight.position.set(3, 5, 8); // Positioned behind camera
+      keyLight.angle = Math.PI / 4;
+      keyLight.penumbra = 0.1;
+      keyLight.decay = 2;
+      keyLight.distance = 20;
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.width = 1024;
+      keyLight.shadow.mapSize.height = 1024;
+      scene.add(keyLight);
 
-      // Position the camera
-      camera.position.z = 5;
+      // Add fill light behind camera
+      const fillLight = new THREE.SpotLight(0xffffff, 0.5);
+      fillLight.position.set(2, 4, 7); // Positioned behind camera
+      fillLight.angle = Math.PI / 4;
+      fillLight.penumbra = 0.1;
+      scene.add(fillLight);
+
+      // Add rim light behind camera
+      const rimLight = new THREE.SpotLight(0xffffff, 0.3);
+      rimLight.position.set(4, 4, 7); // Positioned behind camera
+      rimLight.angle = Math.PI / 4;
+      rimLight.penumbra = 0.1;
+      scene.add(rimLight);
+
+      // Add XYZ axes helper
+      const axesHelper = new THREE.AxesHelper(2);
+      scene.add(axesHelper);
+
+      // Add scroll zoom functionality
+      document.addEventListener('wheel', onMouseWheel, false);
+
+      // Add settings panel controls
+      setupSettingsPanel();
+
+      // Set initial camera position
+      camera.position.set(3, 4, 6);
+      camera.lookAt(0, 0, 0);
+
+      // Add mouse controls
+      document.addEventListener('mousedown', onMouseDown);
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      // Prevent context menu on right click
+      document.addEventListener('contextmenu', (e) => e.preventDefault());
+    }
+
+    function onMouseWheel(event) {
+      event.preventDefault();
+      
+      // Adjust zoom based on scroll direction
+      const zoomSpeed = 0.1;
+      const delta = -Math.sign(event.deltaY) * zoomSpeed;
+      
+      // Get the camera's direction vector
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+      
+      // Move camera along its direction vector
+      camera.position.addScaledVector(direction, delta * 5);
+      
+      // Ensure camera always looks at center
+      camera.lookAt(0, 0, 0);
+
+    }
+
+    function updatePositionDisplay() {
+        if (model) {
+            // Convert rotation to degrees
+            const rotation = model.rotation;
+            const toDegrees = (rad) => ((rad * 180 / Math.PI) % 360).toFixed(1);
+            
+            // Convert Euler angles to yaw (y), pitch (x), and roll (z)
+            const yaw = toDegrees(rotation.y);    // Rotation around Y axis
+            const pitch = toDegrees(rotation.x);   // Rotation around X axis
+            const roll = toDegrees(rotation.z);    // Rotation around Z axis
+            
+            document.getElementById('model-orientation').textContent = 
+                `yaw: ${yaw}°, pitch: ${pitch}°, roll: ${roll}°`;
+        }
+    }
+
+    function addGroundPlaneControls() {
+      const settingsPanel = document.querySelector('.settings-panel');
+      const groundPlaneDiv = document.createElement('div');
+      groundPlaneDiv.innerHTML = `
+        <div>
+          <label>Ground Plane:</label>
+          <button id="toggle-ground">Toggle Grid</button>
+        </div>
+        <div>
+          <label>Grid Size:</label>
+          <input type="range" id="grid-size" min="5" max="50" step="5" value="20">
+        </div>
+      `;
+      settingsPanel.appendChild(groundPlaneDiv);
+    }
+
+    function createGroundPlane(size = 20) {
+      if (groundPlane) {
+        scene.remove(groundPlane);
+      }
+
+      const gridHelper = new THREE.GridHelper(size, size, 0x888888, 0xffffff);
+      gridHelper.position.y = -3; // Position slightly below the model
+      groundPlane = gridHelper;
+      scene.add(groundPlane);
+    }
+
+    function setupSettingsPanel() {
+      const settingsToggle = document.getElementById('settings-toggle');
+      const settingsPanel = document.querySelector('.settings-panel');
+      
+      settingsToggle.addEventListener('click', () => {
+        settingsPanel.classList.toggle('visible');
+      });
+
+      // Ambient light intensity control
+      document.getElementById('ambient-intensity').addEventListener('input', (e) => {
+        ambientLight.intensity = parseFloat(e.target.value);
+      });
+
+      // Key light intensity control
+      document.getElementById('key-intensity').addEventListener('input', (e) => {
+        keyLight.intensity = parseFloat(e.target.value);
+      });
+
+      // Background color control
+      document.getElementById('bg-color').addEventListener('input', (e) => {
+        scene.background = new THREE.Color(e.target.value);
+      });
+
+      // Add ground plane controls
+      addGroundPlaneControls();
+
+      // Wait a brief moment for the DOM to update before adding event listeners
+      setTimeout(() => {
+        // Ground plane toggle
+        const toggleButton = document.getElementById('toggle-ground');
+        if (toggleButton) {
+          toggleButton.addEventListener('click', () => {
+            if (groundPlane) {
+              scene.remove(groundPlane);
+              groundPlane = null;
+            } else {
+              const size = parseInt(document.getElementById('grid-size').value);
+              createGroundPlane(size);
+            }
+          });
+        }
+
+        // Grid size control
+        const gridSizeInput = document.getElementById('grid-size');
+        if (gridSizeInput) {
+          gridSizeInput.addEventListener('input', (e) => {
+            if (groundPlane) {
+              createGroundPlane(parseInt(e.target.value));
+            }
+          });
+        }
+      }, 100);
+    }
+
+    function onMouseDown(event) {
+        if (event.button === 0) { // Left click
+            isDragging = true;
+        } else if (event.button === 2) { // Right click
+            isRightDragging = true;
+        }
+        previousMousePosition = {
+            x: event.clientX,
+            y: event.clientY
+        };
+    }
+
+    function onMouseMove(event) {
+        if (!isDragging && !isRightDragging) return;
+
+        const deltaMove = {
+            x: event.clientX - previousMousePosition.x,
+            y: event.clientY - previousMousePosition.y
+        };
+
+        if (isDragging) { // Orbit
+            // Convert camera position to spherical coordinates
+            spherical.setFromVector3(camera.position);
+            
+            // Update angles
+            spherical.theta -= deltaMove.x * 0.005;
+            spherical.phi -= deltaMove.y * 0.005;
+            
+            // Clamp phi to avoid going under/over the poles
+            spherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1, spherical.phi));
+            
+            // Convert back to Cartesian coordinates
+            camera.position.setFromSpherical(spherical);
+            camera.lookAt(target);
+        } else if (isRightDragging) { // Pan
+            const pan = new THREE.Vector3();
+            const distance = camera.position.length();
+            
+            // Pan left/right
+            pan.x = -deltaMove.x * distance * 0.002;
+            // Pan up/down
+            pan.y = deltaMove.y * distance * 0.002;
+            
+            // Apply pan to both camera and target
+            camera.position.add(pan);
+            target.add(pan);
+            camera.lookAt(target);
+        }
+
+        previousMousePosition = {
+            x: event.clientX,
+            y: event.clientY
+        };
+
+        updatePositionDisplay();
+    }
+
+    function onMouseUp() {
+        isDragging = false;
+        isRightDragging = false;
     }
 
     // Animation loop
     function animate() {
       requestAnimationFrame(animate);
+      
+      if (model && !isDragging && !isRightDragging) {
+        // Update model rotation
+        model.rotation.y = rotationAngle;
+      }
+      
+      updatePositionDisplay();
       renderer.render(scene, camera);
     }
 
     // Function to rotate the model
     function rotateModel() {
-      rotationAngle += Math.PI / 4;  // Rotate by 45 degrees
-      if (model) {
-        model.rotation.x = rotationAngle;
-        model.rotation.y = rotationAngle;
-      }
+        rotationAngle += Math.PI / 128;
+        if (model) {
+            model.rotation.y = rotationAngle;
+            updatePositionDisplay(); // Update display when rotation changes
+        }
     }
-
     setInterval(()=>{
       rotateModel();
-    }, 1000);
+    }, 50);
+
+    // Add window resize handler to maintain display position
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Add a function to set specific orientation
+    function setOrientation(yaw, pitch, roll) {
+        if (model) {
+            // Convert degrees to radians
+            const toRadians = (deg) => deg * Math.PI / 180;
+            
+            model.rotation.y = toRadians(yaw);     // Yaw
+            model.rotation.x = toRadians(pitch);   // Pitch
+            model.rotation.z = toRadians(roll);    // Roll
+            
+            updatePositionDisplay();
+        }
+    }
+
     init();
   </script>
 </body>
